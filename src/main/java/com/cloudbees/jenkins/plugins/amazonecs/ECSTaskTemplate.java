@@ -26,16 +26,12 @@
 package com.cloudbees.jenkins.plugins.amazonecs;
 
 import com.amazonaws.services.ecs.AmazonECSClient;
-import com.amazonaws.services.ecs.model.ContainerDefinition;
-import com.amazonaws.services.ecs.model.KeyValuePair;
-import com.amazonaws.services.ecs.model.RegisterTaskDefinitionRequest;
-import com.amazonaws.services.ecs.model.RegisterTaskDefinitionResult;
+import com.amazonaws.services.ecs.model.*;
 import hudson.Extension;
 import hudson.model.AbstractDescribableImpl;
 import hudson.model.Descriptor;
 import hudson.model.Label;
 import hudson.model.labels.LabelAtom;
-import jenkins.model.JenkinsLocationConfiguration;
 import org.apache.commons.lang.StringUtils;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
@@ -43,7 +39,8 @@ import org.kohsuke.stapler.DataBoundSetter;
 import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -104,14 +101,32 @@ public class ECSTaskTemplate extends AbstractDescribableImpl<ECSTaskTemplate> {
     private String jvmArgs;
 
     private String taskDefinitionArn;
+    /**
+     * Whether or not to run the container in privileged mode
+     */
+    private final boolean privileged;
+
+    /**
+     * A comma separated list of mount points 'hostPath:containerPath, hostPath2:containerPath2'
+     */
+    private final String mountPoints;
+    /**
+     * A comma separated list of volumes 'volumeName:containerPath, volumeName2:containerPath2'
+     */
+    private final String volumes;
+
 
     @DataBoundConstructor
-    public ECSTaskTemplate(@Nullable String label, @Nonnull String image, @Nullable String remoteFSRoot, int memory, int cpu) {
+    public ECSTaskTemplate(@Nullable String label, @Nonnull String image, @Nullable String remoteFSRoot, int memory, int cpu, boolean privileged, @Nullable String mountPoints, @Nullable String volumes) {
         this.label = label;
         this.image = image;
         this.remoteFSRoot = remoteFSRoot;
         this.memory = memory;
         this.cpu = cpu;
+        this.privileged = privileged;
+        this.mountPoints = mountPoints;
+        this.volumes = volumes;
+
     }
 
     @DataBoundSetter
@@ -152,6 +167,42 @@ public class ECSTaskTemplate extends AbstractDescribableImpl<ECSTaskTemplate> {
         return jvmArgs;
     }
 
+    public boolean getPrivileged(){
+        return privileged;
+    }
+
+    public String getMountPoints(){
+        return mountPoints;
+    }
+
+    public String getVolumes(){
+        return volumes;
+    }
+
+    public List<MountPoint> getParsedMounts(){
+        String mountPoints1 = getMountPoints();
+        List<MountPoint> mounts = new ArrayList<MountPoint>();
+        if(StringUtils.isEmpty(mountPoints1))
+            return mounts;
+        for(String mount: mountPoints1.split(",")){
+            String[] paths = mount.split(":");
+            mounts.add(new MountPoint().withContainerPath(paths[1]).withSourceVolume(paths[0]));
+        }
+        return mounts;
+    }
+
+    public List<Volume> getParsedVolumes(){
+        String mountPoints1 = getVolumes();
+        List<Volume> mounts = new ArrayList<Volume>();
+        if(StringUtils.isEmpty(mountPoints1))
+            return mounts;
+        for(String mount: mountPoints1.split(",")){
+            String[] paths = mount.split(":");
+            mounts.add(new Volume().withHost(new HostVolumeProperties().withSourcePath(paths[1])).withName(paths[0]));
+        }
+        return mounts;
+    }
+
     public String getTaskDefinitionArn() {
         return taskDefinitionArn;
     }
@@ -169,7 +220,11 @@ public class ECSTaskTemplate extends AbstractDescribableImpl<ECSTaskTemplate> {
                 .withName("jenkins-slave")
                 .withImage(image)
                 .withMemory(memory)
-                .withCpu(cpu);
+                .withCpu(cpu)
+                .withPrivileged(privileged)
+
+                .withMountPoints(getParsedMounts());
+
         if (entrypoint != null)
             def.withEntryPoint(StringUtils.split(entrypoint));
 
@@ -180,7 +235,9 @@ public class ECSTaskTemplate extends AbstractDescribableImpl<ECSTaskTemplate> {
 
         return new RegisterTaskDefinitionRequest()
             .withFamily("jenkins-slave")
-            .withContainerDefinitions(def);
+            .withContainerDefinitions(def)
+            .withVolumes(getParsedVolumes());
+
     }
 
     public void setOwer(ECSCloud owner) {
